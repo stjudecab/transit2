@@ -306,7 +306,8 @@ def extract_staggered(infile, outfile, vars):
     Tn = vars.prefix
     message("prefix sequence: %s" % vars.prefix)
     lenTn = len(Tn)
-    ADAPTER2 = "TACCACGACCA"
+    ADAPTER2 = vars.adapter
+    message("adapter sequence: %s" % vars.adapter)
     lenADAP = len(ADAPTER2)
 
     # P,Q = 0,15
@@ -1661,6 +1662,7 @@ def initialize_globals(vars, args=[], kwargs={}):
     vars.transposon = "Himar1"
     vars.protocol = "Sassetti"
     vars.prefix = "ACTTATCAGCCAACCTGTTA"
+    vars.adapter = "TACCACGACCA"
     vars.flags = ""
     vars.barseq_catalog_in = vars.barseq_catalog_out = None
     vars.window_size = -1
@@ -1694,6 +1696,8 @@ def initialize_globals(vars, args=[], kwargs={}):
         vars.transposon = "Tn5"
     if "primer" in kwargs:
         vars.prefix = kwargs["primer"].strip()
+    if "adapter" in kwargs:
+        vars.adapter = kwargs["adapter"].strip()
     if "reads1" in kwargs:
         vars.fq1 = kwargs["reads1"]
     if "reads2" in kwargs:
@@ -1784,6 +1788,8 @@ def read_config(vars):
                 vars.protocol = " ".join(w[1:])
             if len(w) >= 2 and w[0] == "primer":
                 vars.prefix = w[1]
+            if len(w) >= 2 and w[0] == "adapter":
+                vars.adapter = w[1]
             if len(w) >= 2 and w[0] == "barseq_catalog_in":
                 vars.barseq_catalog_in = w[1]
             if len(w) >= 2 and w[0] == "barseq_catalog_out":
@@ -1810,6 +1816,7 @@ def save_config(vars):
     f.write("transposon %s\n" % vars.transposon)
     f.write("protocol %s\n" % vars.protocol)
     f.write("primer %s\n" % vars.prefix)
+    f.write("adapter %s\n" % vars.adapter)
     if vars.barseq_catalog_in != None:
         f.write("barseq_catalog_in %s\n" % vars.barseq_catalog_in)
     if vars.barseq_catalog_out != None:
@@ -1824,6 +1831,7 @@ def show_help():
     print("  OPTIONAL ARGS:")
     print("    -protocol [Sassetti|Tn5|Mme1] # which sample prep protocol was used?; sassetti protocol is the default; this sets the default transposon and primer sequence")
     print("    -primer <seq>      # prefix of reads corresponding to end of transposon at junction with genomic sequence; can override default seq")
+    print("    -adapter <seq>     # suffix adapter sequence used to trim the 3' end of short fragments; default is TACCACGACCA")
     print("    -maxreads <INT>")
     print("    -mismatches <INT>  # when searching for constant regions in reads 1 and 2; default is 1")
     print('    -flags "<STRING>"  # args to pass to BWA')
