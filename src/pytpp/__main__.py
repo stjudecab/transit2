@@ -95,6 +95,7 @@ def main(args, kwargs):
                 "himar1",
                 "protocol",
                 "primer",
+                "adapter",
                 "reads1",
                 "reads2",
                 "bwa",
