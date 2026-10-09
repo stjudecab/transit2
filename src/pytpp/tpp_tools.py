@@ -29,7 +29,6 @@ from collections import defaultdict
 
 
 def clean_args(rawargs):
-    
     args = []
     kwargs = {}
     count = 0
@@ -47,8 +46,8 @@ def clean_args(rawargs):
             count += 1
         elif rawargs[count].startswith("-"):  # and len(rawargs[count].split(" ")) == 1:
             if count + 1 < len(rawargs) and (
-                not rawargs[count + 1].startswith("-")
-                or len(rawargs[count + 1].split(" ")) > 1
+                    not rawargs[count + 1].startswith("-")
+                    or len(rawargs[count + 1].split(" ")) > 1
             ):
                 kwargs[rawargs[count][1:]] = rawargs[count + 1]
                 count += 1
@@ -154,15 +153,15 @@ def fix_paired_headers_for_bwa(reads1, reads2):
                 )  # this was neceesary for bwa 0.7.10 but not 0.7.12
                 f = f.replace("/", "_")
                 # if i<n-1:
-                if e[i + 1 :] != f[i + 1 :]:
+                if e[i + 1:] != f[i + 1:]:
                     raise Exception(
                         "Error: unexpected format of headers in .fastq files"
                     )
                 e, f = e[:-1], f[:-1]  # strip EOL
                 # needed for bwa 0.7.12? which apparently trims off last 2 chars to make ids identical
                 # "/[1|2]" are automatically trimmed, but not /3
-                e = e[:i] + e[i + 1 :]
-                f = f[:i] + f[i + 1 :]
+                e = e[:i] + e[i + 1:]
+                f = f[:i] + f[i + 1:]
             c.write(e + "\n")
             d.write(f + "\n")
     except Exception as ex:
@@ -294,12 +293,12 @@ def mmfind(G, n, H, m, max):
 
 
 def windowize(
-    origin, window_size
+        origin, window_size
 ):  # Generate P,Q values based on a window size (tolerance)
     lower_bound = origin - ((window_size + 0) / 2)  # Example, if we assume origin = 28:
     upper_bound = origin + ((window_size + 1) / 2)  # for window_size = 0: 28, 28
     #                   1: 28, 29
-    return lower_bound, upper_bound  #                   2: 27, 29 etc.
+    return lower_bound, upper_bound  # 2: 27, 29 etc.
 
 
 def extract_staggered(infile, outfile, vars):
@@ -383,7 +382,7 @@ def extract_staggered(infile, outfile, vars):
                 if c != -1 and d != -1:
                     size = d - c - barseq1len
                     if size >= 15 and size <= 25:
-                        seq = line[c + barseq1len : d]
+                        seq = line[c + barseq1len: d]
                 catalog.write(header + "\n")
                 catalog.write(seq + "\n")
     if vars.barseq_catalog_out != None:
@@ -467,7 +466,7 @@ def select_cycles(infile, i, j, outfile):
                 header = line
             else:
                 output.write(header)
-                output.write(line[i - 1 : j] + "\n")
+                output.write(line[i - 1: j] + "\n")
     output.close()
 
 
@@ -520,7 +519,6 @@ def parse_sam_header(sam_filename):
 
 
 def get_replicon_names_from_sam_header(sam_header):
-
     if "@SQ" not in sam_header:
         raise ValueError("No @SQ tags found in SAM header")
 
@@ -536,7 +534,6 @@ def get_replicon_names_from_sam_header(sam_header):
 
 
 def count_sam_header_lines(sam_header):
-
     num_sam_header_lines = 0
 
     for at_sign_sam_tag in sam_header:
@@ -571,8 +568,87 @@ def samcode(num):
     return rev
 
 
+# ---------------------------------------------------------------------------
+# Where does an alignment's TA site lie?  (Himar1, TA-based counting)
+#
+# The coordinate arithmetic below depends on whether the target-site TA was removed from
+# the read together with the primer:
+#
+#   trimmed   the primer ends in TA (the default Himar1 primer ACTTATCAGCCAACCTGTTA does), so the
+#             aligned read starts right after the TA:
+#                 forward   site = POS - 2
+#                 reverse   site = POS + span            (the TA follows the alignment)
+#   retained  the primer stops before the TA (or the reads were trimmed elsewhere, e.g. cutadapt
+#             with the ITR only), so the TA is the first two bases of the aligned read:
+#                 forward   site = POS
+#                 reverse   site = POS + span - 2        (the TA is the last two aligned bases)
+#
+# "span" is the number of reference bases covered by the alignment (from the CIGAR), so an
+# insertion or deletion in the read does not shift the reverse-strand site.  Earlier versions
+# used len(SEQ) here and always assumed "trimmed": with "retained" reads that put every read
+# 2 bp from its TA and silently dropped most of them.
+# ---------------------------------------------------------------------------
+TA_CONVENTIONS = ("auto", "trimmed", "retained")
+
+_CIGAR_OPS = re.compile(r"(\d+)([MIDNSHP=X])")
+
+
+def resolve_ta_convention(vars):
+    """Return "trimmed" or "retained" for the current settings (see the comment above).
+
+    -ta-convention auto (the default) infers it from the primer: a non-empty primer that does not end
+    in TA means the TA stays on the read.  With an empty primer (reads trimmed before tpp) nothing can
+    be inferred and the historical "trimmed" arithmetic is kept; pass -ta-convention retained if those
+    reads still start with the TA.  Only the TA-based Himar1 counting is affected: Tn5 / other
+    transposons and the Mme1 protocol always use the historical arithmetic.
+    """
+    if getattr(vars, "transposon", "Himar1") != "Himar1":
+        return "trimmed"
+    if str(getattr(vars, "protocol", "")).lower() == "mme1":
+        return "trimmed"
+    choice = str(getattr(vars, "ta_convention", "auto") or "auto").lower()
+    if choice in ("trimmed", "retained"):
+        return choice
+    prefix = str(getattr(vars, "prefix", "") or "").strip().upper()
+    if prefix and not prefix.endswith("TA"):
+        return "retained"
+    return "trimmed"
+
+
+def describe_ta_convention(vars):
+    """One-line explanation of the resolved convention, for the log and the .tn_stats header."""
+    convention = resolve_ta_convention(vars)
+    choice = str(getattr(vars, "ta_convention", "auto") or "auto").lower()
+    prefix = str(getattr(vars, "prefix", "") or "").strip()
+    if choice in ("trimmed", "retained") and convention == choice:
+        why = "set with -ta-convention"
+    elif prefix == "":
+        why = "auto: no primer, assuming the TA was trimmed before tpp; use -ta-convention retained if the reads still start with TA"
+    elif convention == "retained":
+        why = "auto: the primer does not end in TA, so the TA stays at the 5' end of the reads"
+    else:
+        why = "auto: the primer ends in TA, so it is trimmed together with the primer"
+    return "%s (%s)" % (convention, why)
+
+
+def cigar_reference_span(cigar, default):
+    """Reference bases covered by a CIGAR string (M, D, N, =, X); `default` if the CIGAR is '*'."""
+    if cigar == "*":
+        return default
+    return sum(int(n) for n, op in _CIGAR_OPS.findall(cigar) if op in "MDN=X")
+
+
+def junction_site(convention, reverse, pos, span):
+    """1-based coordinate of the T of the TA assigned to an alignment starting at `pos` (1-based) and
+    covering `span` reference bases.  `convention` is "trimmed" or "retained"."""
+    if convention == "retained":
+        return pos + span - 2 if reverse else pos
+    return pos + span if reverse else pos - 2
+
+
 def template_counts(ref, sam, bcfile, vars):
     vars.mapped = vars.r1 = vars.r2 = 0
+    ta_convention = resolve_ta_convention(vars)
 
     barcodes = {}
     with open(bcfile) as file:
@@ -608,22 +684,23 @@ def template_counts(ref, sam, bcfile, vars):
                     vars.r2 += 1
                 if bc == "XXXXXXXXXX": continue
                 # bit 6 means this is read 1; bit 1 means properly mapped pair
-                #if (code[6] == "1" and code[1] == "1"):  # both reads map properly (83 or 99) and has legit barcode
+                # if (code[6] == "1" and code[1] == "1"):  # both reads map properly (83 or 99) and has legit barcode
                 intcode = int(w[1])
-                if intcode in [0,16,81,83,97,99]: # allow improperly-mapped reads
-                    if intcode in [83,99]: vars.proper_read_pairs += 1 # code[6]==1 and code[1]==1; does not include 0 or 16 for single-read
-                    if intcode in [81,97]:
-                      vars.improper_read_pairs += 1
-                      if vars.allow_improper==False: continue
+                if intcode in [0, 16, 81, 83, 97, 99]:  # allow improperly-mapped reads
+                    if intcode in [83,
+                                   99]: vars.proper_read_pairs += 1  # code[6]==1 and code[1]==1; does not include 0 or 16 for single-read
+                    if intcode in [81, 97]:
+                        vars.improper_read_pairs += 1
+                        if vars.allow_improper == False: continue
                     vars.mapped += 1
 
                     readlen = len(w[9])
                     pos, size = int(w[3]), int(w[8])  # note: size could be negative
-                    strand, delta = "F", -2
-                    if code[4] == "1":
-                        strand, delta = "R", readlen
+                    strand = "R" if code[4] == "1" else "F"
 
-                    pos += delta
+                    pos = junction_site(
+                        ta_convention, strand == "R", pos, cigar_reference_span(w[5], readlen)
+                    )
                     replicon_name = w[2]
                     if pos not in hits[replicon_name]:
                         hits[replicon_name][pos] = []
@@ -635,7 +712,7 @@ def template_counts(ref, sam, bcfile, vars):
         genome = read_genome(ref, replicon_index)
         for i in range(len(genome) - 1):
             # if genome[i:i+2].upper()=="TA":
-            if vars.transposon == "Himar1" and genome[i : i + 2].upper() != "TA":
+            if vars.transposon == "Himar1" and genome[i: i + 2].upper() != "TA":
                 continue
             else:
                 pos = i + 1
@@ -675,6 +752,7 @@ def increase_counts(pos, sites, strand):
 
 
 def read_counts(ref, sam, vars):
+    ta_convention = resolve_ta_convention(vars)
     sites_dict = {}
     sam_header = parse_sam_header(sam)
     replicon_names = get_replicon_names_from_sam_header(sam_header)
@@ -684,7 +762,7 @@ def read_counts(ref, sam, vars):
         genome = read_genome(ref, replicon_names_index)
         for i in range(len(genome) - 1):
             # if genome[i:i+2]=="TA" or vars.transposon=='Tn5':
-            if vars.transposon == "Himar1" and genome[i : i + 2] != "TA":
+            if vars.transposon == "Himar1" and genome[i: i + 2] != "TA":
                 continue
             pos = i + 1
             sites[pos] = [pos, 0, 0, 0, 0, 0, 0]
@@ -713,22 +791,22 @@ def read_counts(ref, sam, vars):
                         if code[4] == "1":
                             strand, delta = "R", 1
                         site1 = (
-                            pos + delta - 2
+                                pos + delta - 2
                         )  # if on + strand, take column 3 position and add 1bp,
                         site2 = (
-                            pos + delta - 1
+                                pos + delta - 1
                         )  # check one off just in case it enzyme chewed too much
                         if site1 in sites_dict[replicon_name]:
                             increase_counts(site1, sites_dict[replicon_name], strand)
                         if site2 in sites_dict[replicon_name]:
                             increase_counts(site2, sites_dict[replicon_name], strand)
                     else:
-                        strand, delta = "F", -2
-                        if code[4] == "1":
-                            strand, delta = "R", readlen
-                        site1 = (
-                            pos + delta
-                        )  # if on + strand, take column 3 position and add 1bp)
+                        # forward / reverse TA site of this alignment; see the comment above
+                        # junction_site() for the "trimmed" and "retained" conventions
+                        strand = "R" if code[4] == "1" else "F"
+                        site1 = junction_site(
+                            ta_convention, strand == "R", pos, cigar_reference_span(w[5], readlen)
+                        )
                         if site1 in sites_dict[replicon_name]:
                             increase_counts(site1, sites_dict[replicon_name], strand)
 
@@ -746,13 +824,13 @@ def driver(vars):
     vars.reads1 = vars.base + ".reads1"
     vars.reads2 = vars.base + ".reads2"
     vars.trimmed1 = (
-        vars.base + ".trimmed1"
+            vars.base + ".trimmed1"
     )  # Final fastq for read 1 is stored in this file
     vars.trimmed2 = vars.base + ".trimmed2"
     vars.barcodes1 = vars.base + ".barcodes1"
     vars.barcodes2 = vars.base + ".barcodes2"
     vars.genomic2 = (
-        vars.base + ".genomic2"
+            vars.base + ".genomic2"
     )  # Final fastq for read 2 is stored in this file
 
     # [RJ] These variables are for the run_bwa() step (reference genome involved)
@@ -831,6 +909,9 @@ def driver(vars):
     #   if vars.transposon=="Tn5": vars.prefix = "TAAGAGACAG"
     #   elif vars.transposon=="Himar1": vars.prefix = "ACTTATCAGCCAACCTGTTA" # [ORIGINAL]
     #   else: vars.prefix = ""
+
+    if vars.transposon == "Himar1" and vars.protocol.lower() != "mme1":
+        message("TA convention: %s" % describe_ta_convention(vars))
 
     try:
         extract_reads(vars)
@@ -1189,11 +1270,11 @@ def create_barseq_catalog(vars, replicon_index):
             nreads += 1
             if samcode in [0, 16]:  # what about PE reads?
                 header, coord = w[0], int(w[3])
-                # see how I adjust coords in read_counts()
-                strand, delta = "F", -2
-                if samcode == 16:
-                    strand, delta = "R", len(w[9])
-                coord += delta
+                # same TA coordinate as in read_counts()
+                strand = "R" if samcode == 16 else "F"
+                coord = junction_site(
+                    resolve_ta_convention(vars), strand == "R", coord, cigar_reference_span(w[5], len(w[9]))
+                )
                 if strand == "R":
                     coord *= -1
                 if coord not in sites:
@@ -1212,7 +1293,7 @@ def create_barseq_catalog(vars, replicon_index):
                 totbc += 1
                 if site < 0:
                     site *= -1
-                if genome[site - 1 : site + 1] == "TA":
+                if genome[site - 1: site + 1] == "TA":
                     maptoTAs += 1
 
     # good barcodes are those that are associated with only 1 site (must be TA?)
@@ -1233,7 +1314,7 @@ def create_barseq_catalog(vars, replicon_index):
     n = len(genome)
     a, b = 0, 0
     for i in range(n - 1):
-        if genome[i : i + 2] == "TA":
+        if genome[i: i + 2] == "TA":
             a += 1
             co = i + 1
             barcodes_pos = [(x, "+") for x in sites.get(co, [])]
@@ -1242,11 +1323,11 @@ def create_barseq_catalog(vars, replicon_index):
             if len(pop) > 0:
                 b += 1
             else:
-                file.write("# %s %s\n" % (co, genome[i : i + 2]))
+                file.write("# %s %s\n" % (co, genome[i: i + 2]))
             for (bc, strand), cnt in pop:
                 if bc in goodbc:
                     file.write(
-                        "%s %s %s %s %s\n" % (co, genome[i : i + 2], strand, bc, cnt)
+                        "%s %s %s %s %s\n" % (co, genome[i: i + 2], strand, bc, cnt)
                     )
     file.write(
         "# total_reads: %s, total_barcodes: %s, map_to_TAs: %s, distinct_bc: %s, unimapped: %s, TA_sites_hit: %s/%s\n"
@@ -1376,6 +1457,8 @@ def generate_output(vars):
     output.write(" ".join(sys.argv) + "\n")
     output.write("# transposon type: %s\n" % vars.transposon)
     output.write("# protocol type: %s\n" % vars.protocol)
+    if vars.transposon == "Himar1" and vars.protocol.lower() != "mme1":
+        output.write("# ta_convention: %s\n" % describe_ta_convention(vars))
     output.write("# bwa flags: %s\n" % vars.flags)
     output.write("# read1: %s\n" % vars.fq1)
     output.write("# read2: %s\n" % vars.fq2)
@@ -1583,7 +1666,6 @@ def set_tn5_defaults(vars):
 
 
 def verify_inputs(vars):
-
     if not os.path.exists(vars.fq1):
         error("reads1 file not found: " + vars.fq1)
     vars.single_end = False
@@ -1608,6 +1690,13 @@ def verify_inputs(vars):
             "barseq catalog input and output files cannot both be defined at the same time"
         )
 
+    if getattr(vars, "ta_convention", "auto") != "auto" and (
+            vars.transposon != "Himar1" or vars.protocol.lower() == "mme1"
+    ):
+        warning(
+            "-ta-convention only applies to the TA-based Himar1 counting (not Tn5 / Mme1) and is ignored here."
+        )
+
     # If Mme1 protocol, warn that we don't use read2 file
     if vars.protocol.lower() == "mme1" and not vars.single_end:
         warning(
@@ -1621,9 +1710,9 @@ def verify_inputs(vars):
         import platform
         if platform.system() != "Windows":
             import subprocess
-            output = subprocess.check_output([ 'sh', '-c', 'command -v bwa'])
+            output = subprocess.check_output(['sh', '-c', 'command -v bwa'])
             vars.bwa = output.decode()[0:-1]
-    
+
     if os.path.isdir(vars.bwa):
         bwaexec_unix = os.path.join(vars.bwa, "bwa")
         bwaexec_win = os.path.join(vars.bwa, "bwa.exe")
@@ -1671,7 +1760,8 @@ def initialize_globals(vars, args=[], kwargs={}):
     vars.improper_read_pairs = 0
     vars.proper_read_pairs = 0
     vars.window = None
-    vars.bwa_alg = "aln" # changed from "mem" back to 'aln' [TRI, 9/14/24]
+    vars.bwa_alg = "aln"  # changed from "mem" back to 'aln' [TRI, 9/14/24]
+    vars.ta_convention = "auto"  # is the target-site TA trimmed with the primer? see resolve_ta_convention()
 
     # Update defaults
     protocol = kwargs.get("protocol", "").lower()
@@ -1714,15 +1804,15 @@ def initialize_globals(vars, args=[], kwargs={}):
         vars.mm1 = int(kwargs["mismatches"])
     if "allow-improperly-mapped-read-pairs" in kwargs:
         vars.allow_improper = True
-    #if "barseq_catalog_in" in kwargs:
+    # if "barseq_catalog_in" in kwargs:
     #    vars.barseq_catalog_in = kwargs["barseq_catalog_in"]
-    #if "barseq_catalog_out" in kwargs:
+    # if "barseq_catalog_out" in kwargs:
     #    vars.barseq_catalog_out = kwargs["barseq_catalog_out"]
     if "flags" in kwargs:
         vars.flags = kwargs["flags"]
 
     if (
-        "window-size" in kwargs
+            "window-size" in kwargs
     ):  # [RJ] Adding support for window-size, which is the tolerance of positions for the Tn prefix
         vars.window_size = int(kwargs["window-size"])
         if vars.window_size < 6:
@@ -1741,6 +1831,14 @@ def initialize_globals(vars, args=[], kwargs={}):
 
     if "replicon-ids" in kwargs:
         vars.replicon_ids = kwargs["replicon-ids"]
+
+    if "ta-convention" in kwargs:
+        choice = str(kwargs["ta-convention"]).lower()
+        if choice not in TA_CONVENTIONS:
+            raise ValueError(
+                "Error: ta-convention can only be one of: %s" % ", ".join(TA_CONVENTIONS)
+            )
+        vars.ta_convention = choice
 
     # Handle no primer but Tn5 protocol case
     # Handled in initialize_globals and tpp_gui
@@ -1772,6 +1870,8 @@ def read_config(vars):
                 vars.bwa_alg = w[1]
             if len(w) >= 2 and w[0] == "flags":
                 vars.flags = " ".join(w[1:])
+            if len(w) >= 2 and w[0] == "ta_convention" and w[1].lower() in TA_CONVENTIONS:
+                vars.ta_convention = w[1].lower()
             # if len(w)>=2 and w[0]=='prefix': vars.base = w[1]
             if len(w) >= 2 and w[0] == "mismatches1":
                 vars.mm1 = int(w[1])
@@ -1805,6 +1905,7 @@ def save_config(vars):
     f.write("bwa %s\n" % vars.bwa)
     f.write("bwa_alg %s\n" % vars.bwa_alg)
     f.write("flags %s\n" % vars.flags)
+    f.write("ta_convention %s\n" % getattr(vars, "ta_convention", "auto"))
     f.write("mismatches1 %s\n" % vars.mm1)
     f.write(
         "primer_start_window %s,%s\n"
@@ -1827,20 +1928,32 @@ def save_config(vars):
 def show_help():
     # print('usage: python PATH/src/tpp.py -bwa <EXECUTABLE_WITH_PATH> -ref <fasta-file|comma_separated_list> -reads1 <FASTQ_OR_FASTA_FILE> [-reads2 <FASTQ_OR_FASTA_FILE>] -output <BASE_FILENAME> [-maxreads <N>] [-mismatches <N>] [-flags "<STRING>"] [-tn5|-himar1] [-primer <seq>] [-primer-start-window INT,INT] [-window-size INT] [-barseq_catalog_in|_out <file>] [-replicon-ids <comma_separated_list_of_names>]')
 
-    print("usage: python PATH/src/tpp.py -bwa <EXECUTABLE_WITH_PATH> -ref <fasta-file|comma_separated_list> -reads1 <FASTQ_OR_FASTA_FILE> [-reads2 <FASTQ_OR_FASTA_FILE>] -output <BASE_FILENAME> [OPTIONAL ARGS]")
+    print(
+        "usage: python PATH/src/tpp.py -bwa <EXECUTABLE_WITH_PATH> -ref <fasta-file|comma_separated_list> -reads1 <FASTQ_OR_FASTA_FILE> [-reads2 <FASTQ_OR_FASTA_FILE>] -output <BASE_FILENAME> [OPTIONAL ARGS]")
     print("  OPTIONAL ARGS:")
-    print("    -protocol [Sassetti|Tn5|Mme1] # which sample prep protocol was used?; sassetti protocol is the default; this sets the default transposon and primer sequence")
-    print("    -primer <seq>      # prefix of reads corresponding to end of transposon at junction with genomic sequence; can override default seq")
-    print("    -adapter <seq>     # suffix adapter sequence used to trim the 3' end of short fragments; default is TACCACGACCA")
+    print(
+        "    -protocol [Sassetti|Tn5|Mme1] # which sample prep protocol was used?; sassetti protocol is the default; this sets the default transposon and primer sequence")
+    print(
+        "    -primer <seq>      # prefix of reads corresponding to end of transposon at junction with genomic sequence; can override default seq")
+    print(
+        "    -adapter <seq>     # suffix adapter sequence used to trim the 3' end of short fragments; default is TACCACGACCA")
     print("    -maxreads <INT>")
     print("    -mismatches <INT>  # when searching for constant regions in reads 1 and 2; default is 1")
     print('    -flags "<STRING>"  # args to pass to BWA')
     print("    -bwa-alg [aln|mem]  # Algorithm to use for mapping reads with bwa. Default: 'aln'")
     print("    -primer-start-window INT,INT # position in read to search for start of primer; default is [0,20]")
+    print(
+        "    -ta-convention [auto|trimmed|retained]  # Himar1 only: is the target-site TA removed together with the primer (trimmed) or does it stay at the 5' end of the reads (retained)?")
+    print(
+        "                                            # auto (default): trimmed if the primer ends in TA (as the default primer does), retained if it does not; with an empty primer")
+    print(
+        "                                            # (reads trimmed before TPP) nothing can be inferred and trimmed is used, so pass 'retained' if those reads still start with TA")
     print("    -window-size INT   # automatic method to set window")
-    #print("    -barseq_catalog_in|-barseq_catalog_out <file>")
-    print("    -allow-improperly-mapped-read-pairs  # in rare cases, this can help increase mapped reads (e.g. if fragment size distribution is very short); see statistics in *.tn_stats output")
-    print("    -replicon-ids <comma_separated_list_of_names> # if multiple replicons/genomes/contigs/sequences were provided in -ref, give them names.")
+    # print("    -barseq_catalog_in|-barseq_catalog_out <file>")
+    print(
+        "    -allow-improperly-mapped-read-pairs  # in rare cases, this can help increase mapped reads (e.g. if fragment size distribution is very short); see statistics in *.tn_stats output")
+    print(
+        "    -replicon-ids <comma_separated_list_of_names> # if multiple replicons/genomes/contigs/sequences were provided in -ref, give them names.")
     print("                                                  # Enter 'auto' for autogenerated ids.")
 
 

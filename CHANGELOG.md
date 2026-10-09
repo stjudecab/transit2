@@ -3,6 +3,21 @@
 All notable changes to this project will be documented in this file.
 
 
+## Unreleased
+#### Transit2-TPP
+
+Bug fixes:
+  - TPP assumed the target-site TA is always removed together with the primer (site = POS-2 on the forward
+    strand, POS+len(SEQ) on the reverse strand). When the primer stops before the TA, or the reads were trimmed
+    with another tool and still start with the TA, every read was credited 2 bp from its TA and most were dropped.
+    New flag '-ta-convention [auto|trimmed|retained]' (default 'auto': 'retained' if the primer does not end in TA,
+    otherwise 'trimmed', which is the previous behavior). The choice is logged and written to the *.tn_stats output
+    ('# ta_convention'). Himar1 TA counting only; Tn5 and Mme1 are unchanged.
+  - the reverse-strand site now uses the number of reference bases covered by the alignment (CIGAR) instead of the
+    read length, so an insertion or deletion no longer moves the site (affects read_counts, template_counts and the
+    barseq catalog)
+
+
 ## Version 1.1.9 (2025-12-29)
 #### Transit2-TPP
 

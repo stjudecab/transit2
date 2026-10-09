@@ -190,7 +190,27 @@ The main fields to fill out in the GUI are...
    of every read.  If you preprocess your reads by trimming off the 5' transposon
    prefixes, you could set this to blank, and TPP will process all your reads; but
    we don't recommend doing it this way.
- 
+
+-  **TA convention** (``-ta-convention``, Himar1 only) - tells TPP whether the target-site
+   TA is removed from the read together with the primer. Himar1 inserts into a TA, and the
+   read maps to the genome starting either right after that TA (the default primer
+   ACTTATCAGCCAACCTGT\ **TA** includes it, so the TA is *trimmed* with the primer) or at
+   it (a primer that stops at ...CCAACCTGT, or reads pre-trimmed with another tool such as
+   cutadapt using the ITR only, leave the TA at the 5' end of the read: the TA is *retained*).
+   TPP needs to know which, because it converts the position of an alignment into the
+   TA site it came from: for *trimmed* reads the site is POS-2 (forward strand) or the
+   base after the alignment end (reverse strand); for *retained* reads it is POS (forward)
+   or the second-to-last aligned base (reverse). The reverse end is taken from the CIGAR
+   (the reference bases covered), so an insertion or deletion in the read does not shift it.
+   With the wrong convention every read is credited 2 bp from its TA and most of them are
+   dropped, because that position is usually not a TA.
+   The default, ``auto``, chooses *trimmed* if the primer ends in TA and *retained* if it
+   does not. With an empty primer (reads trimmed before TPP) nothing can be inferred and
+   *trimmed* is used, so give ``-ta-convention retained`` if those reads still start with TA.
+   The choice is printed when TPP starts and recorded in the ``# ta_convention`` line of the
+   ``.tn_stats`` file. It has no effect on Tn5 or the Mme1 protocol. The GUI has no field for
+   it: it is ``auto`` unless ``tpp.cfg`` contains a ``ta_convention`` line.
+
 -  **Max reads** - Normally, leave this blank by default, and TPP will
    process all reads. However, if you want to do a quick run on a subset
    of the data, you can select a smaller number. This is mainly for
@@ -255,6 +275,7 @@ filenames and parameters as command-line arguments.
     -mismatches <INT>  # when searching for constant regions in reads 1 and 2; default is 1
     -flags "<STRING>"  # args to pass to BWA
     -primer-start-window INT,INT # position in read to search for start of primer; default is [0,20]
+    -ta-convention [auto|trimmed|retained] # Himar1: is the target-site TA removed together with the primer? default is auto (see below)
     -window-size INT   # automatic method to set window
     -bwa-alg [aln|mem] # BWA mode for mapping reads; 'aln' is the default
     -replicon-ids <comma_separated_list_of_names> # if multiple replicons/genomes/contigs/sequences were provided in -ref, give them names.
@@ -307,6 +328,11 @@ The input arguments and file types are as follows:
 +----------------------+--------------------------------------------------+------------------------------------------------------+
 | -primer-start-window | INT,INT (default is 0,20)                        | Start and end nucleotides in read 1                  |
 |                      |                                                  | in which to search for start of Tn prefix.           |
++----------------------+--------------------------------------------------+------------------------------------------------------+
+| -ta-convention       | auto (default), trimmed or retained              | Himar1 only. Is the target-site TA trimmed together  |
+|                      |                                                  | with the primer (trimmed) or does it stay at the 5'  |
+|                      |                                                  | end of the read (retained)? auto: trimmed if the     |
+|                      |                                                  | primer ends in TA, retained if not.                  |
 +----------------------+--------------------------------------------------+------------------------------------------------------+
 
 (Note: if you have already run TPP once, the you can leave out the
