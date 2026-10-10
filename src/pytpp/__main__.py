@@ -112,6 +112,7 @@ def main(args, kwargs):
                 "replicon-ids",
                 "primer-start-window",
                 "ta-convention",
+                "wig-sites",
             ]
         )
         unknown_flags = set(kwargs.keys()) - known_flags

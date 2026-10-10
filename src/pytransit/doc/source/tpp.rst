@@ -211,6 +211,17 @@ The main fields to fill out in the GUI are...
    ``.tn_stats`` file. It has no effect on Tn5 or the Mme1 protocol. The GUI has no field for
    it: it is ``auto`` unless ``tpp.cfg`` contains a ``ta_convention`` line.
 
+-  **Wig sites** (``-wig-sites``, Himar1 only) - which coordinates get a row in the ``.counts``
+   and ``.wig`` files. The default, ``ta``, lists only the T of every TA dinucleotide, which is
+   what the TA-based analysis methods expect. With ``all`` every nucleotide from 1 to the length of
+   the replicon is listed (zero-filled) and a read is counted at the coordinate its junction
+   lands on whether or not it is a TA, giving a dense nucleotide-resolution track; the counts at
+   the TA sites are the same in both modes. Files are roughly 20 times larger, and the
+   ``TA_sites``, ``TAs_hit`` and ``density`` lines of the ``.tn_stats`` file then count nucleotides.
+   The Tn5 protocol already lists every position, and the Mme1 protocol always uses TA sites, so
+   the flag has no effect there. The GUI has no field for it: it is ``ta`` unless ``tpp.cfg``
+   contains a ``wig_sites`` line.
+
 -  **Max reads** - Normally, leave this blank by default, and TPP will
    process all reads. However, if you want to do a quick run on a subset
    of the data, you can select a smaller number. This is mainly for
@@ -276,6 +287,7 @@ filenames and parameters as command-line arguments.
     -flags "<STRING>"  # args to pass to BWA
     -primer-start-window INT,INT # position in read to search for start of primer; default is [0,20]
     -ta-convention [auto|trimmed|retained] # Himar1: is the target-site TA removed together with the primer? default is auto (see below)
+    -wig-sites [ta|all] # Himar1: write only the TA sites (default) or every nucleotide 1..L to the .counts and .wig files
     -window-size INT   # automatic method to set window
     -bwa-alg [aln|mem] # BWA mode for mapping reads; 'aln' is the default
     -replicon-ids <comma_separated_list_of_names> # if multiple replicons/genomes/contigs/sequences were provided in -ref, give them names.
@@ -333,6 +345,11 @@ The input arguments and file types are as follows:
 |                      |                                                  | with the primer (trimmed) or does it stay at the 5'  |
 |                      |                                                  | end of the read (retained)? auto: trimmed if the     |
 |                      |                                                  | primer ends in TA, retained if not.                  |
++----------------------+--------------------------------------------------+------------------------------------------------------+
+| -wig-sites           | ta (default) or all                              | Himar1 only. Coordinates written to the .counts and  |
+|                      |                                                  | .wig files: only the TA sites (ta), or every         |
+|                      |                                                  | nucleotide 1..L, counting reads wherever their       |
+|                      |                                                  | junction lands (all).                                |
 +----------------------+--------------------------------------------------+------------------------------------------------------+
 
 (Note: if you have already run TPP once, the you can leave out the

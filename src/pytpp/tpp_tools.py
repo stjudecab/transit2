@@ -646,6 +646,50 @@ def junction_site(convention, reverse, pos, span):
     return pos + span if reverse else pos - 2
 
 
+# ---------------------------------------------------------------------------
+# Which coordinates get a row in the .counts and .wig files?
+#
+#   ta    Himar1: only the T of every TA dinucleotide (the historical behaviour; this is what Transit's
+#         TA-based methods expect).  Other transposons (e.g. Tn5): every position 1..L-1, as before.
+#   all   Himar1: every nucleotide 1..L, zero-filled, with no TA requirement: a read is counted at the
+#         coordinate its junction lands on whether or not that is a TA (dense nucleotide-resolution
+#         track).  Reads are assigned to coordinates exactly as in "ta" mode, so the counts at the TA
+#         sites are identical in both modes.
+#
+# -wig-sites only changes the Himar1 (non-Mme1) tables.  Mme1 credits two neighbouring coordinates
+# per read, so a dense table would double-count; it always uses the TA table.
+# ---------------------------------------------------------------------------
+WIG_SITES = ("ta", "all")
+
+
+def resolve_wig_sites(vars):
+    """Return "ta" or "all" for the current settings (see the comment above)."""
+    if getattr(vars, "transposon", "Himar1") != "Himar1":
+        return "ta"
+    if str(getattr(vars, "protocol", "")).lower() == "mme1":
+        return "ta"
+    choice = str(getattr(vars, "wig_sites", "ta") or "ta").lower()
+    return "all" if choice == "all" else "ta"
+
+
+def describe_wig_sites(vars):
+    """One-line explanation of the resolved site set, for the log and the .tn_stats header."""
+    if resolve_wig_sites(vars) == "all":
+        return "all (every nucleotide 1..L, no TA requirement; the TA_sites / TAs_hit / density fields below then count nucleotides)"
+    return "ta (TA sites only)"
+
+
+def site_positions(genome, vars):
+    """1-based coordinates that get a row in the .counts / .wig file of one replicon (`genome` is upper-case)."""
+    if resolve_wig_sites(vars) == "all":
+        return range(1, len(genome) + 1)
+    return [
+        i + 1
+        for i in range(len(genome) - 1)
+        if vars.transposon != "Himar1" or genome[i: i + 2] == "TA"
+    ]
+
+
 def template_counts(ref, sam, bcfile, vars):
     vars.mapped = vars.r1 = vars.r2 = 0
     ta_convention = resolve_ta_convention(vars)
@@ -710,28 +754,23 @@ def template_counts(ref, sam, bcfile, vars):
     for replicon_index in range(vars.num_replicons):
         sites = []
         genome = read_genome(ref, replicon_index)
-        for i in range(len(genome) - 1):
-            # if genome[i:i+2].upper()=="TA":
-            if vars.transposon == "Himar1" and genome[i: i + 2].upper() != "TA":
-                continue
-            else:
-                pos = i + 1
-                h = hits[replicon_names[replicon_index]].get(pos, [])
-                f = list(filter(lambda x: x[0] == "F", h))
-                r = list(filter(lambda x: x[0] == "R", h))
-                u = list(set(h))
-                uf = list(filter(lambda x: x[0] == "F", u))
-                ur = list(filter(lambda x: x[0] == "R", u))
-                data = [
-                    pos,
-                    len(f),
-                    len(uf),
-                    len(r),
-                    len(ur),
-                    len(f) + len(r),
-                    len(uf) + len(ur),
-                ]
-                sites.append(data)
+        for pos in site_positions(genome, vars):  # TA sites, or every nucleotide with -wig-sites all
+            h = hits[replicon_names[replicon_index]].get(pos, [])
+            f = list(filter(lambda x: x[0] == "F", h))
+            r = list(filter(lambda x: x[0] == "R", h))
+            u = list(set(h))
+            uf = list(filter(lambda x: x[0] == "F", u))
+            ur = list(filter(lambda x: x[0] == "R", u))
+            data = [
+                pos,
+                len(f),
+                len(uf),
+                len(r),
+                len(ur),
+                len(f) + len(r),
+                len(uf) + len(ur),
+            ]
+            sites.append(data)
         sites_list.append(sites)
 
     return sites_list  # list of (coord, Fwd_Rd_Ct, Fwd_Templ_Ct, Rev_Rd_Ct, Rev_Templ_Ct, Tot_Rd_Ct, Tot_Templ_Ct)
@@ -760,11 +799,7 @@ def read_counts(ref, sam, vars):
     for replicon_names_index in range(vars.num_replicons):
         sites = {}
         genome = read_genome(ref, replicon_names_index)
-        for i in range(len(genome) - 1):
-            # if genome[i:i+2]=="TA" or vars.transposon=='Tn5':
-            if vars.transposon == "Himar1" and genome[i: i + 2] != "TA":
-                continue
-            pos = i + 1
+        for pos in site_positions(genome, vars):  # TA sites, or every nucleotide with -wig-sites all
             sites[pos] = [pos, 0, 0, 0, 0, 0, 0]
             sites_dict[replicon_names[replicon_names_index]] = sites
 
@@ -912,6 +947,7 @@ def driver(vars):
 
     if vars.transposon == "Himar1" and vars.protocol.lower() != "mme1":
         message("TA convention: %s" % describe_ta_convention(vars))
+        message("wig sites: %s" % describe_wig_sites(vars))
 
     try:
         extract_reads(vars)
@@ -1459,6 +1495,7 @@ def generate_output(vars):
     output.write("# protocol type: %s\n" % vars.protocol)
     if vars.transposon == "Himar1" and vars.protocol.lower() != "mme1":
         output.write("# ta_convention: %s\n" % describe_ta_convention(vars))
+        output.write("# wig_sites: %s\n" % describe_wig_sites(vars))
     output.write("# bwa flags: %s\n" % vars.flags)
     output.write("# read1: %s\n" % vars.fq1)
     output.write("# read2: %s\n" % vars.fq2)
@@ -1697,6 +1734,13 @@ def verify_inputs(vars):
             "-ta-convention only applies to the TA-based Himar1 counting (not Tn5 / Mme1) and is ignored here."
         )
 
+    if getattr(vars, "wig_sites", "ta") != "ta" and (
+            vars.transposon != "Himar1" or vars.protocol.lower() == "mme1"
+    ):
+        warning(
+            "-wig-sites only applies to Himar1 counting (not Tn5 / Mme1): Tn5 already writes every position, and Mme1 always uses TA sites."
+        )
+
     # If Mme1 protocol, warn that we don't use read2 file
     if vars.protocol.lower() == "mme1" and not vars.single_end:
         warning(
@@ -1762,6 +1806,7 @@ def initialize_globals(vars, args=[], kwargs={}):
     vars.window = None
     vars.bwa_alg = "aln"  # changed from "mem" back to 'aln' [TRI, 9/14/24]
     vars.ta_convention = "auto"  # is the target-site TA trimmed with the primer? see resolve_ta_convention()
+    vars.wig_sites = "ta"  # which coordinates get a row in the .counts / .wig files; see resolve_wig_sites()
 
     # Update defaults
     protocol = kwargs.get("protocol", "").lower()
@@ -1840,6 +1885,14 @@ def initialize_globals(vars, args=[], kwargs={}):
             )
         vars.ta_convention = choice
 
+    if "wig-sites" in kwargs:
+        choice = str(kwargs["wig-sites"]).lower()
+        if choice not in WIG_SITES:
+            raise ValueError(
+                "Error: wig-sites can only be one of: %s" % ", ".join(WIG_SITES)
+            )
+        vars.wig_sites = choice
+
     # Handle no primer but Tn5 protocol case
     # Handled in initialize_globals and tpp_gui
     if "primer" not in kwargs and vars.transposon == "Tn5":
@@ -1872,6 +1925,8 @@ def read_config(vars):
                 vars.flags = " ".join(w[1:])
             if len(w) >= 2 and w[0] == "ta_convention" and w[1].lower() in TA_CONVENTIONS:
                 vars.ta_convention = w[1].lower()
+            if len(w) >= 2 and w[0] == "wig_sites" and w[1].lower() in WIG_SITES:
+                vars.wig_sites = w[1].lower()
             # if len(w)>=2 and w[0]=='prefix': vars.base = w[1]
             if len(w) >= 2 and w[0] == "mismatches1":
                 vars.mm1 = int(w[1])
@@ -1906,6 +1961,7 @@ def save_config(vars):
     f.write("bwa_alg %s\n" % vars.bwa_alg)
     f.write("flags %s\n" % vars.flags)
     f.write("ta_convention %s\n" % getattr(vars, "ta_convention", "auto"))
+    f.write("wig_sites %s\n" % getattr(vars, "wig_sites", "ta"))
     f.write("mismatches1 %s\n" % vars.mm1)
     f.write(
         "primer_start_window %s,%s\n"
@@ -1948,6 +2004,10 @@ def show_help():
         "                                            # auto (default): trimmed if the primer ends in TA (as the default primer does), retained if it does not; with an empty primer")
     print(
         "                                            # (reads trimmed before TPP) nothing can be inferred and trimmed is used, so pass 'retained' if those reads still start with TA")
+    print(
+        "    -wig-sites [ta|all]  # Himar1 only: which coordinates get a row in the .counts / .wig files; ta (default): only the T of each TA dinucleotide;")
+    print(
+        "                                    # all: every nucleotide 1..L (zero-filled, reads are counted wherever their junction lands, TA or not). Tn5 always writes every position")
     print("    -window-size INT   # automatic method to set window")
     # print("    -barseq_catalog_in|-barseq_catalog_out <file>")
     print(

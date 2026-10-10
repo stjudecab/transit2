@@ -19,10 +19,13 @@ from pytpp.tpp_tools import (
     clean_args,
     cigar_reference_span,
     describe_ta_convention,
+    describe_wig_sites,
     initialize_globals,
     junction_site,
     read_counts,
     resolve_ta_convention,
+    resolve_wig_sites,
+    site_positions,
     template_counts,
 )
 
@@ -35,12 +38,13 @@ def revcomp(seq):
     return seq.translate(COMP)[::-1]
 
 
-def make_vars(prefix, convention="auto", transposon="Himar1", protocol="Sassetti", num_replicons=1):
+def make_vars(prefix, convention="auto", transposon="Himar1", protocol="Sassetti", num_replicons=1, wig_sites="ta"):
     v = Globals()
     v.transposon = transposon
     v.protocol = protocol
     v.prefix = prefix
     v.ta_convention = convention
+    v.wig_sites = wig_sites
     v.num_replicons = num_replicons
     v.allow_improper = False
     v.proper_read_pairs = 0
@@ -218,6 +222,120 @@ class TestCounting(unittest.TestCase):
             self.assertEqual(self.hit_sites(counts), {t1: (1, 1, 0, 0, 1, 1), t2: (0, 0, 1, 1, 1, 1)}, convention)
 
 
+class TestWigSites(unittest.TestCase):
+    """-wig-sites [ta|all]: which coordinates get a row in the .counts / .wig files."""
+
+    @classmethod
+    def setUpClass(cls):
+        rng = random.Random(21)
+        cls.genome = "".join(rng.choice("ACGT") for _ in range(3000))
+        cls.sites = ta_sites(cls.genome)
+        cls.tmp = tempfile.mkdtemp(prefix="tpp_wig_sites_")
+        cls.fasta = os.path.join(cls.tmp, "ref.fa")
+        with open(cls.fasta, "w") as fh:
+            fh.write(">chr\n" + cls.genome + "\n")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def write_sam(self, records):
+        path = os.path.join(self.tmp, "aln.sam")
+        with open(path, "w") as fh:
+            fh.write("@HD\tVN:1.6\n@SQ\tSN:chr\tLN:%d\n" % len(self.genome))
+            for name, flag, pos, mapq, cigar, seq_len in records:
+                fh.write("\t".join([name, str(flag), "chr", str(pos), str(mapq), cigar, "*", "0", "0", "A" * seq_len, "I" * seq_len]) + "\n")
+        return path
+
+    def off_ta_position(self, after=500):
+        """A coordinate, away from the ends, whose dinucleotide is not TA."""
+        return next(i + 1 for i in range(after, 2000) if self.genome[i:i + 2] != "TA")
+
+    def test_resolution(self):
+        self.assertEqual(resolve_wig_sites(make_vars(ITR)), "ta")
+        self.assertEqual(resolve_wig_sites(make_vars(ITR, wig_sites="all")), "all")
+        self.assertEqual(resolve_wig_sites(make_vars(ITR, wig_sites="ALL")), "all")
+        # only the Himar1 (non-Mme1) tables are affected
+        self.assertEqual(resolve_wig_sites(make_vars(ITR, transposon="Tn5", protocol="Tn5", wig_sites="all")), "ta")
+        self.assertEqual(resolve_wig_sites(make_vars(ITR, protocol="Mme1", wig_sites="all")), "ta")
+        self.assertEqual(resolve_wig_sites(Globals()), "ta")                      # objects without the attribute behave as before
+        self.assertIn("every nucleotide 1..L", describe_wig_sites(make_vars(ITR, wig_sites="all")))
+        self.assertIn("TA sites only", describe_wig_sites(make_vars(ITR)))
+
+    def test_site_positions(self):
+        n = len(self.genome)
+        ta = [i + 1 for i in range(n - 1) if self.genome[i:i + 2] == "TA"]
+        self.assertEqual(list(site_positions(self.genome, make_vars(ITR))), ta)
+        self.assertEqual(list(site_positions(self.genome, make_vars(ITR, wig_sites="all"))), list(range(1, n + 1)))
+        # Tn5 keeps writing 1..L-1 whatever -wig-sites says
+        for choice in ("ta", "all"):
+            tn5 = make_vars(ITR, transposon="Tn5", protocol="Tn5", wig_sites=choice)
+            self.assertEqual(list(site_positions(self.genome, tn5)), list(range(1, n)))
+
+    def test_option_parsing(self):
+        v = Globals()
+        initialize_globals(v, kwargs={"himar1": True})
+        self.assertEqual(v.wig_sites, "ta")
+        for choice in ("ta", "all", "All"):
+            v = Globals()
+            args, kwargs = clean_args(["-wig-sites", choice])
+            initialize_globals(v, kwargs=kwargs)
+            self.assertEqual(v.wig_sites, choice.lower())
+        v = Globals()
+        args, kwargs = clean_args(["-wig-sites", "everything"])
+        with self.assertRaises(ValueError):
+            initialize_globals(v, kwargs=kwargs)
+
+    def test_dense_table_has_every_nucleotide_and_the_same_counts_on_ta(self):
+        t1, t2 = self.sites[:2]
+        off1 = self.off_ta_position()
+        off2 = self.off_ta_position(after=off1 + 10)
+        sam = self.write_sam([
+            ("f1", 0, t1, 60, "50M", 50),
+            ("f2", 0, t1, 60, "50M", 50),
+            ("r1", 16, t2 + 1 - 49, 60, "50M", 50),
+            ("off_f", 0, off1, 60, "50M", 50),                   # forward junction on a non-TA nucleotide
+            ("off_r", 16, off2 + 1 - 49, 60, "50M", 50),         # reverse junction (end - 1) on another one
+        ])
+        ta_rows = read_counts(self.fasta, sam, make_vars(ITR))[0]
+        all_rows = read_counts(self.fasta, sam, make_vars(ITR, wig_sites="all"))[0]
+        self.assertEqual([r[0] for r in all_rows], list(range(1, len(self.genome) + 1)))
+        by_pos = {r[0]: r[1:7] for r in all_rows}
+        # TA sites carry exactly the counts they have in TA mode
+        for row in ta_rows:
+            self.assertEqual(by_pos[row[0]], row[1:7])
+        # the off-TA alignments are kept at their junction coordinate
+        self.assertEqual(by_pos[off1], [1, 1, 0, 0, 1, 1])
+        self.assertEqual(by_pos[off2], [0, 0, 1, 1, 1, 1])
+        self.assertEqual(sum(r[5] for r in ta_rows), 3)
+        self.assertEqual(sum(r[5] for r in all_rows), 5)
+
+    def test_dense_table_with_the_trimmed_convention(self):
+        t1 = self.sites[0]
+        off = self.off_ta_position()
+        sam = self.write_sam([("f", 0, t1 + 2, 60, "50M", 50), ("off", 0, off + 2, 60, "50M", 50)])
+        rows = read_counts(self.fasta, sam, make_vars(DEFAULT_PRIMER, wig_sites="all"))[0]
+        hit = {r[0]: r[5] for r in rows if r[5] > 0}
+        self.assertEqual(hit, {t1: 1, off: 1})
+
+    def test_dense_template_counts(self):
+        t1 = self.sites[0]
+        bc = os.path.join(self.tmp, "bc.fa")
+        with open(bc, "w") as fh:
+            fh.write(">f\nACGTACGTAC\n")
+        sam = self.write_sam([("f", 99, t1, 60, "50M", 50)])
+        rows = template_counts(self.fasta, sam, bc, make_vars(ITR, wig_sites="all"))[0]
+        self.assertEqual(len(rows), len(self.genome))
+        self.assertEqual({r[0]: r[5] for r in rows if r[5] > 0}, {t1: 1})
+
+    def test_mme1_and_tn5_ignore_the_option(self):
+        sam = self.write_sam([("f", 0, 1000, 60, "50M", 50)])
+        tn5 = read_counts(self.fasta, sam, make_vars(ITR, transposon="Tn5", protocol="Tn5", wig_sites="all"))[0]
+        self.assertEqual(len(tn5), len(self.genome) - 1)
+        mme1 = read_counts(self.fasta, sam, make_vars(ITR, protocol="Mme1", wig_sites="all"))[0]
+        self.assertEqual([r[0] for r in mme1], [i + 1 for i in range(len(self.genome) - 1) if self.genome[i:i + 2] == "TA"])
+
+
 def get_bwa():
     found = shutil.which("bwa")
     return found or ""
@@ -287,6 +405,27 @@ class TestEndToEnd(unittest.TestCase):
         counts, stats = self.run_tpp("itr_only", ["-primer", ITR])
         self.assertEqual(counts, self.truth)
         self.assertIn("# ta_convention: retained (auto: the primer does not end in TA", stats)
+        self.assertIn("# wig_sites: ta (TA sites only)", stats)
+
+    def test_every_nucleotide_can_be_written_instead_of_the_ta_sites(self):
+        base = os.path.join(self.tmp, "dense")
+        args = ["-bwa", get_bwa(), "-ref", self.fasta, "-reads1", self.fastq, "-output", base, "-himar1",
+                "-primer-start-window", "0,20", "-primer", ITR, "-wig-sites", "all"]
+        (a, kw) = clean_args(args)
+        self.tppMain(a, kw)
+        coords, hit = [], {}
+        with open(base + ".wig") as fh:
+            for line in fh:
+                if line[0] in "#v":
+                    continue
+                pos, n = line.split()
+                coords.append(int(pos))
+                if int(n) > 0:
+                    hit[int(pos)] = int(n)
+        self.assertEqual(coords, list(range(1, len(self.genome) + 1)))   # consecutive, 1..L
+        self.assertEqual(hit, self.truth)                                  # and the same counts on the TA sites
+        with open(base + ".tn_stats") as fh:
+            self.assertIn("# wig_sites: all (every nucleotide 1..L", fh.read())
 
     def test_primer_with_ta_is_unchanged(self):
         counts, stats = self.run_tpp("itr_ta", ["-primer", ITR + "TA"])

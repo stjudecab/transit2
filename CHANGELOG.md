@@ -17,6 +17,14 @@ Bug fixes:
     read length, so an insertion or deletion no longer moves the site (affects read_counts, template_counts and the
     barseq catalog)
 
+New feature:
+  - New flag '-wig-sites [ta|all]' (default 'ta', the previous behavior). With 'all' the .counts and .wig files of
+    a Himar1 run list every nucleotide 1..L (zero-filled) instead of only the TA sites, and a read is counted at the
+    coordinate its junction lands on whether or not that is a TA (dense nucleotide-resolution track). The counts at
+    the TA sites are identical in both modes. The choice is logged and written to the *.tn_stats output
+    ('# wig_sites'); with 'all' the TA_sites / TAs_hit / density fields count nucleotides. Tn5 (already every
+    position) and the Mme1 protocol are unchanged.
+
 
 ## Version 1.1.9 (2025-12-29)
 #### Transit2-TPP
